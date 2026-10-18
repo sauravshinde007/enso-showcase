@@ -6,8 +6,8 @@ import CameraManager from "../managers/CameraManager";
 import PlayerManager from "../managers/PlayerManager";
 import VoiceManager from "../managers/VoiceManager";
 import NetworkManager from "../managers/NetworkManager";
+import StageManager from "../managers/StageManager";
 import socketService from "../../services/socketService";
-import peerService from "../../services/peerService";
 
 export default class WorldScene extends Phaser.Scene {
   constructor() {
@@ -55,12 +55,14 @@ export default class WorldScene extends Phaser.Scene {
     this.playerManager = new PlayerManager(this, this.inputManager, this.mapManager);
     this.voiceManager = new VoiceManager(this);
     this.networkManager = new NetworkManager(this, this.playerManager, this.mapManager, this.voiceManager);
+    this.stageManager = new StageManager(this);
 
     // 2. Initialize Logic
 
     // Map
     this.mapManager.create();
     this.mapManager.registerRaycaster(this.raycasterPlugin);
+    this.stageManager.create(); // Announcement Hall stage
 
     // Player
     this.playerManager.createAnimations();
@@ -84,9 +86,11 @@ export default class WorldScene extends Phaser.Scene {
         console.log("✅ Socket connected, joining game");
         socketService.socket.emit("joinGame", this.username);
 
-        // Init Handlers & PeerJS
+        // Init Handlers & proximity voice/video (LiveKit)
         this.networkManager.setupListeners();
         this.voiceManager.initialize(socketService.socket.id);
+        this.events.once('shutdown', () => this.voiceManager.destroy());
+        this.events.once('destroy', () => this.voiceManager.destroy());
       } else {
         console.log("⏳ Waiting for socket connection...");
         setTimeout(check, 100);
@@ -107,20 +111,22 @@ export default class WorldScene extends Phaser.Scene {
     const now = Date.now();
     if (this.voiceManager && this.playerManager) {
       if (!this.lastAudioUpdate || now - this.lastAudioUpdate > 200) {
-        // iterate all players and update volume based on sanitized ID match
+        // iterate all players and update volume (audio elements are keyed by socket id)
         const players = this.playerManager.players;
         Object.keys(players).forEach(socketId => {
-          const peerId = peerService.getPeerId(socketId);
-          if (this.voiceManager.audioElements[peerId]) {
+          if (this.voiceManager.audioElements[socketId]) {
             const otherContainer = players[socketId];
             if (otherContainer) {
               const otherPlayer = { x: otherContainer.x, y: otherContainer.y };
-              this.voiceManager.updateAudioVolume(this.playerManager.player, otherPlayer, peerId);
+              this.voiceManager.updateAudioVolume(this.playerManager.player, otherPlayer, socketId);
             }
           }
         });
         this.lastAudioUpdate = now;
       }
+
+      // Announcement Hall presence
+      if (this.stageManager) this.stageManager.update(this.playerManager.player);
 
       // Update local video bubble pos
       this.voiceManager.updateLocalVideoPosition(this.playerManager.player, this.cameras.main);
